@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Правила базы</title>
+<style>
+body{margin:0;background:#E8EBEE;color:#15181C;font:600 16px/1.4 -apple-system,system-ui,sans-serif;padding:16px}
+h1{font-size:22px;margin:0 0 8px} p{margin:0 0 12px;color:#3A4048}
+button{width:100%;min-height:56px;border:0;border-radius:16px;background:#23272D;color:#fff;font:800 17px system-ui;margin-bottom:12px}
+textarea{width:100%;box-sizing:border-box;height:60vh;border-radius:14px;border:1px solid #D5D9DE;padding:10px;font:12px/1.35 ui-monospace,monospace;background:#fff;color:#15181C}
+</style></head><body>
+<h1>Правила базы «Заказов»</h1>
+<p>Нажми «Скопировать», потом в Firebase → Firestore → «Правила» удали всё старое, вставь и нажми «Опубликовать».</p>
+<button id="c">Скопировать правила</button>
+<textarea id="t" readonly spellcheck="false">rules_version = &#x27;2&#x27;;
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function isAdmin() {
+      return signedIn() &amp;&amp; request.auth.token.email == &#x27;mr1will123@gmail.com&#x27; &amp;&amp; request.auth.token.email_verified == true;
+    }
+    function doc(path) { return /databases/$(database)/documents/$(path); }
+    function userPath(uid) { return /databases/$(database)/documents/users/$(uid); }
+    function registered(uid) { return isAdmin() || exists(userPath(uid)); }
+    function active(uid) {
+      return isAdmin() || (exists(userPath(uid))
+        &amp;&amp; get(userPath(uid)).data.disabled != true
+        &amp;&amp; get(userPath(uid)).data.paidUntil &gt; request.time);
+    }
+    function teamOwner(uid) {
+      return isAdmin() || (exists(userPath(uid)) &amp;&amp; get(userPath(uid)).data.get(&#x27;team&#x27;, false) == true);
+    }
+    function teamPath(owner) { return /databases/$(database)/documents/teams/$(owner); }
+    function approvedMember(owner, uid) {
+      return exists(/databases/$(database)/documents/teams/$(owner)/members/$(uid))
+        &amp;&amp; get(/databases/$(database)/documents/teams/$(owner)/members/$(uid)).data.approved == true;
+    }
+    match /keys/{key} {
+      allow read, write: if isAdmin();
+      allow get: if signedIn() &amp;&amp; (resource == null || resource.data.used == false || resource.data.usedBy == request.auth.uid);
+      allow update: if signedIn() &amp;&amp; resource.data.used == false
+        &amp;&amp; request.resource.data.used == true
+        &amp;&amp; request.resource.data.usedBy == request.auth.uid
+        &amp;&amp; request.resource.data.diff(resource.data).affectedKeys().hasOnly([&#x27;used&#x27;, &#x27;usedBy&#x27;, &#x27;usedAt&#x27;, &#x27;usedByEmail&#x27;, &#x27;usedByName&#x27;]);
+    }
+    match /users/{uid} {
+      allow read: if isAdmin() || (signedIn() &amp;&amp; request.auth.uid == uid);
+      allow write: if isAdmin();
+      allow create: if signedIn() &amp;&amp; request.auth.uid == uid
+        &amp;&amp; request.resource.data.keys().hasOnly([&#x27;key&#x27;, &#x27;email&#x27;, &#x27;name&#x27;, &#x27;paidUntil&#x27;, &#x27;disabled&#x27;, &#x27;createdAt&#x27;, &#x27;friendCode&#x27;, &#x27;team&#x27;, &#x27;seats&#x27;])
+        &amp;&amp; request.resource.data.get(&#x27;team&#x27;, false) == get(doc(&#x27;keys/&#x27; + request.resource.data.key)).data.get(&#x27;team&#x27;, false)
+        &amp;&amp; request.resource.data.get(&#x27;seats&#x27;, 0) == get(doc(&#x27;keys/&#x27; + request.resource.data.key)).data.get(&#x27;seats&#x27;, 0)
+        &amp;&amp; request.resource.data.disabled == false
+        &amp;&amp; request.resource.data.paidUntil is timestamp
+        &amp;&amp; request.resource.data.paidUntil &lt;= request.time + duration.value(get(doc(&#x27;keys/&#x27; + request.resource.data.key)).data.get(&#x27;months&#x27;, 1) * 31 + 1, &#x27;d&#x27;)
+        &amp;&amp; get(doc(&#x27;keys/&#x27; + request.resource.data.key)).data.used == false
+        &amp;&amp; getAfter(doc(&#x27;keys/&#x27; + request.resource.data.key)).data.usedBy == uid
+        &amp;&amp; getAfter(doc(&#x27;friendCodes/&#x27; + request.resource.data.friendCode)).data.uid == uid;
+      allow update: if signedIn() &amp;&amp; request.auth.uid == uid
+        &amp;&amp; request.resource.data.diff(resource.data).affectedKeys().hasOnly([&#x27;name&#x27;, &#x27;email&#x27;, &#x27;lastSeen&#x27;]);
+      match /{col}/{item} {
+        allow read: if signedIn() &amp;&amp; request.auth.uid == uid &amp;&amp; registered(uid)
+          &amp;&amp; col in [&#x27;orders&#x27;, &#x27;clients&#x27;, &#x27;expenses&#x27;, &#x27;people&#x27;, &#x27;colleagues&#x27;];
+        allow write: if signedIn() &amp;&amp; request.auth.uid == uid &amp;&amp; active(uid)
+          &amp;&amp; col in [&#x27;orders&#x27;, &#x27;clients&#x27;, &#x27;expenses&#x27;, &#x27;people&#x27;, &#x27;colleagues&#x27;];
+      }
+    }
+    match /friendCodes/{code} {
+      allow get: if signedIn() &amp;&amp; active(request.auth.uid);
+      allow create: if signedIn()
+        &amp;&amp; request.resource.data.keys().hasOnly([&#x27;uid&#x27;, &#x27;name&#x27;])
+        &amp;&amp; request.resource.data.uid == request.auth.uid
+        &amp;&amp; getAfter(userPath(request.auth.uid)).data.friendCode == code;
+      allow update: if isAdmin() || (signedIn() &amp;&amp; resource.data.uid == request.auth.uid
+        &amp;&amp; request.resource.data.uid == resource.data.uid);
+      allow delete: if isAdmin();
+    }
+    match /teams/{owner} {
+      allow read: if isAdmin() || (signedIn() &amp;&amp; (request.auth.uid == owner || approvedMember(owner, request.auth.uid)));
+      allow write: if isAdmin() || (signedIn() &amp;&amp; request.auth.uid == owner &amp;&amp; teamOwner(owner) &amp;&amp; active(owner));
+      match /members/{uid} {
+        allow read: if isAdmin() || (signedIn() &amp;&amp; (request.auth.uid == owner || request.auth.uid == uid));
+        allow create: if signedIn() &amp;&amp; request.auth.uid == uid &amp;&amp; uid != owner
+          &amp;&amp; request.resource.data.keys().hasOnly([&#x27;name&#x27;, &#x27;email&#x27;, &#x27;code&#x27;, &#x27;approved&#x27;, &#x27;joinedAt&#x27;])
+          &amp;&amp; request.resource.data.approved == false
+          &amp;&amp; request.resource.data.code == get(teamPath(owner)).data.code;
+        allow update: if (isAdmin() || (signedIn() &amp;&amp; request.auth.uid == owner &amp;&amp; teamOwner(owner)))
+          &amp;&amp; request.resource.data.diff(resource.data).affectedKeys().hasOnly([&#x27;approved&#x27;]);
+        allow delete: if isAdmin() || (signedIn() &amp;&amp; (request.auth.uid == owner || request.auth.uid == uid));
+      }
+      match /feed/{id} {
+        allow read: if signedIn() &amp;&amp; (request.auth.uid == owner
+          || (approvedMember(owner, request.auth.uid) &amp;&amp; active(owner)
+              &amp;&amp; (resource.data.forAll == true || resource.data.assignee == request.auth.uid)));
+        allow write: if signedIn() &amp;&amp; request.auth.uid == owner &amp;&amp; teamOwner(owner) &amp;&amp; active(owner);
+      }
+    }
+    match /teamCodes/{code} {
+      allow get: if signedIn();
+      allow create, update: if (isAdmin() || (signedIn() &amp;&amp; request.resource.data.owner == request.auth.uid &amp;&amp; teamOwner(request.auth.uid)))
+        &amp;&amp; request.resource.data.keys().hasOnly([&#x27;owner&#x27;, &#x27;name&#x27;]);
+      allow delete: if isAdmin() || (signedIn() &amp;&amp; resource.data.owner == request.auth.uid);
+    }
+    match /memberships/{uid} {
+      allow read, write: if signedIn() &amp;&amp; request.auth.uid == uid;
+    }
+    match /payments/{id} { allow read, write: if isAdmin(); }
+    match /adminLog/{id} { allow read, write: if isAdmin(); }
+    match /clientNotes/{uid} { allow read, write: if isAdmin(); }
+    match /transfers/{id} {
+      allow read: if signedIn() &amp;&amp; (resource.data.from == request.auth.uid || resource.data.to == request.auth.uid);
+      allow create: if signedIn() &amp;&amp; active(request.auth.uid)
+        &amp;&amp; request.resource.data.keys().hasOnly([&#x27;from&#x27;, &#x27;fromName&#x27;, &#x27;to&#x27;, &#x27;toName&#x27;, &#x27;order&#x27;, &#x27;fromOrderUid&#x27;, &#x27;status&#x27;, &#x27;createdAt&#x27;, &#x27;applied&#x27;])
+        &amp;&amp; request.resource.data.from == request.auth.uid
+        &amp;&amp; request.resource.data.to != request.auth.uid
+        &amp;&amp; exists(userPath(request.resource.data.to))
+        &amp;&amp; request.resource.data.status == &#x27;pending&#x27;
+        &amp;&amp; request.resource.data.applied == false
+        &amp;&amp; (!(&#x27;name&#x27; in request.auth.token) || request.resource.data.fromName == request.auth.token.name);
+      allow update: if signedIn() &amp;&amp; (
+        (resource.data.status == &#x27;pending&#x27; &amp;&amp; resource.data.to == request.auth.uid &amp;&amp; active(request.auth.uid)
+          &amp;&amp; request.resource.data.status in [&#x27;accepted&#x27;, &#x27;declined&#x27;]
+          &amp;&amp; request.resource.data.diff(resource.data).affectedKeys().hasOnly([&#x27;status&#x27;, &#x27;answeredAt&#x27;]))
+        || (resource.data.status == &#x27;pending&#x27; &amp;&amp; resource.data.from == request.auth.uid
+          &amp;&amp; request.resource.data.status == &#x27;cancelled&#x27;
+          &amp;&amp; request.resource.data.diff(resource.data).affectedKeys().hasOnly([&#x27;status&#x27;, &#x27;applied&#x27;, &#x27;answeredAt&#x27;]))
+        || (resource.data.from == request.auth.uid &amp;&amp; resource.data.status in [&#x27;accepted&#x27;, &#x27;declined&#x27;]
+          &amp;&amp; request.resource.data.diff(resource.data).affectedKeys().hasOnly([&#x27;applied&#x27;])
+          &amp;&amp; request.resource.data.applied == true));
+    }
+  }
+}
+</textarea>
+<script>
+document.getElementById('c').onclick=async function(){
+  var t=document.getElementById('t');
+  try{await navigator.clipboard.writeText(t.value);}catch(e){t.focus();t.select();document.execCommand('copy');}
+  this.textContent='Скопировано ✓ — теперь вставь в Firebase';
+};
+</script></body></html>
